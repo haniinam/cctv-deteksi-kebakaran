@@ -1,0 +1,6 @@
+names:
+  0: fire
+nc: 1
+path: /content/drive/MyDrive/Colab Notebooks/content/proyek_cctv/dataset_master
+train: images/train
+val: images/val
