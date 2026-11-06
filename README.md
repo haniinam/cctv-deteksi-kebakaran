@@ -27,7 +27,16 @@ Sistem pemantauan dan deteksi dini kebakaran berbasis **YOLOv8** dan **DBSCAN Cl
 ├── Dockerfile                  # Konfigurasi containerization
 ├── requirements.txt            # Daftar dependensi Python
 ├── fire_pipeline.py            # Script pemrosesan video offline & JSON telemetry
-├── fire_pipeline_live.py       # Script pengawasan live CCTV & integrasi API
+├── fire_pipeline_live.py       # Script pengawasan live CCTV & integrasi API (Colab)
+├── worker.py                   # Mode server: live CCTV headless, simpan tiap 10 detik
+├── fire.py                     # Deteksi + DBSCAN + level bahaya (logika sama dengan fire_pipeline_live.py)
+├── config.py                   # Semua pengaturan (bisa diganti lewat environment variable)
+├── video_stream.py             # Pembaca stream: selalu frame terbaru, sambung ulang otomatis
+├── output.py / db.py / api.py  # JSON, log harian, database PostgreSQL, REST API
+├── overlay.py                  # Kotak api terbaru untuk dashboard gabungan
+├── docker-compose.yml          # worker + api
+├── data/cameras.json           # Daftar kamera (id, nama, lokasi, sumber stream)
+├── models/fire_openvino_model/ # best_v3.pt diekspor ke OpenVINO (640 px)
 └── README.md                   # Dokumen panduan penggunaan
 ```
 
@@ -75,22 +84,37 @@ process_fire_telemetry(video_input_path="input_video.mp4", model_path="best_v3.p
 
 ---
 
-### 2. Menjalankan via Docker Container
+### 2. Mode Server (OpenVINO, tanpa Colab)
 
-**Build Docker Image:**
+`worker.py` menjalankan deteksi pada stream di `data/cameras.json` memakai model OpenVINO
+(`models/fire_openvino_model`, hasil ekspor `best_v3.pt`, ±0,7 detik/frame di CPU vs ±1,5 detik/frame PyTorch).
+Logika deteksi sama dengan `fire_pipeline_live.py`: confidence 0,45, DBSCAN eps 120,
+Level 2 > 10.000 px, Level 3 > 40.000 px, Level 3 lebih dari 5 detik = "Level 3 (Bahaya)".
+
 ```bash
-docker build -t fire-detection-app .
+pip install -r requirements.txt
+python worker.py                          # headless, status tiap 10 detik
+python worker.py --show                   # dengan jendela video (ESC untuk keluar)
+python worker.py --source test-fire4.mp4  # uji dengan file video
+uvicorn api:app --port 8000               # API: /health, /fire/latest, /fire/history
 ```
 
-**Jalankan Container:**
+Setiap 10 detik (status terburuk dalam 10 detik itu, termasuk "Aman"):
+`logs/fire_data.json`, `logs/fire_YYYYMMDD.jsonl`, dan tabel `fire_snapshots` jika env `DATABASE_URL` diisi.
+Waktu memakai WIB dengan zona waktu (`+07:00`) dan setiap data membawa `camera_id`.
+
+---
+
+### 3. Menjalankan via Docker Container
+
 ```bash
-docker run --rm fire-detection-app
+docker compose up -d --build      # worker + API (http://localhost:8000/fire/latest)
+docker compose logs -f worker
+docker compose down
 ```
 
-**Jalankan dengan Volume Mount (Akses Berkas Lokal dari Dalam Container):**
-```bash
-docker run --rm -v ${PWD}:/app fire-detection-app python fire_pipeline.py
-```
+`data/`, `models/`, dan `logs/` di-mount dari host, jadi kamera dan model bisa diganti tanpa build ulang.
+Image memakai Python 3.12 (Python 3.10 tidak lagi didukung PyTorch terbaru) dan versi library dikunci di `requirements.txt`.
 
 ---
 
